@@ -1,0 +1,21 @@
+RewriteEngine On
+
+# Habilitar CORS
+<IfModule mod_headers.c>
+    # Permitir solicitudes desde http://localhost:3000 (tu frontend de Next.js)
+    Header set Access-Control-Allow-Origin "*"
+    Header set Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE"
+    Header set Access-Control-Allow-Headers "Content-Type, Authorization"
+    Header set Access-Control-Allow-Credentials "true"
+</IfModule>
+
+# Responder correctamente a la solicitud OPTIONS (preflight)
+<IfModule mod_rewrite.c>
+    RewriteCond %{REQUEST_METHOD} OPTIONS
+    RewriteRule ^ - [R=200,L]
+</IfModule>
+
+# Reglas de reescritura originales
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php [QSA,L]
