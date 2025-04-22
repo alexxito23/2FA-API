@@ -1,14 +1,13 @@
 <?php
 
+date_default_timezone_set('Europe/Madrid'); // o tu zona real
+
 require_once 'jwt.php';
 
 function generateAuthCookie($userID, $expiresIn = 3600) {
     // **Crear nuevo JWT**
-    $payload = [
-        "id" => $userID,
-        "exp" => time() + $expiresIn // Tiempo de expiración dinámico
-    ];
-    $jwtCookie = JWTHandler::encode($payload);
+    $payload = [ "id" => $userID ];
+    $jwtCookie = JWTHandler::encode($payload, $expiresIn);
 
     // **Configurar la cookie JWT**
     setcookie("auth", $jwtCookie, [

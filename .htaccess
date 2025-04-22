@@ -3,7 +3,7 @@ RewriteEngine On
 # Habilitar CORS
 <IfModule mod_headers.c>
     # Permitir solicitudes desde http://localhost:3000 (tu frontend de Next.js)
-    Header set Access-Control-Allow-Origin "*"
+    Header set Access-Control-Allow-Origin "http://localhost:3000"
     Header set Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE"
     Header set Access-Control-Allow-Headers "Content-Type, Authorization"
     Header set Access-Control-Allow-Credentials "true"

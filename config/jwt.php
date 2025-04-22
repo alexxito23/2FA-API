@@ -10,9 +10,9 @@ class JWTHandler {
     private static $issuer = 'localhost';          // El emisor del token
 
     // Codificar (Generar) el JWT
-    public static function encode($data) {
+    public static function encode($data, $expiresIn = 420) {
         $issuedAt = time();
-        $expirationTime = $issuedAt + 420;  // Expiración 7 minutos
+        $expirationTime = $issuedAt + $expiresIn;  // Expiración 7 minutos por defecto
         $payload = array(
             'iat' => $issuedAt,
             'exp' => $expirationTime,
