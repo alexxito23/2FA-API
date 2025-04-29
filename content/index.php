@@ -1311,7 +1311,6 @@ Flight::route('POST /shared', function () {
     }
 
     $userID = $userData["id"];
-
     $jsonData = file_get_contents("php://input");
     $data = json_decode($jsonData, true);
 
@@ -1319,6 +1318,7 @@ Flight::route('POST /shared', function () {
     $tipo = $data["tipo"] ?? null;
     $correos = $data["correos"] ?? null;
     $directorio = $data["directorio"] ?? null;
+    $correo = $data["propietario"] ?? null;
 
     if (!$nombre || !$tipo || !$correos || !$directorio) {
         Flight::json(["message" => "Faltan datos obligatorios."], 400);
@@ -1328,49 +1328,118 @@ Flight::route('POST /shared', function () {
     $directorio = trim($directorio, "/");
     $rutaFisica = $directorio ? basename($directorio) : "/";
 
-    if ($tipo === 'archivo') {
-        $stmt = $pdo->prepare("SELECT id FROM directorios WHERE nombre = ? AND propietario = ?");
-        $stmt->execute([$rutaFisica, $userID]);
-        $directorioId = $stmt->fetchColumn();
+    $id = null;
+    $esCompartido = false;
 
-        if ($directorioId === false) {
-            Flight::halt(404, "Directorio no encontrado");
+    if ($correo) {
+        $stmtUsuario = $pdo->prepare("SELECT id FROM usuarios WHERE email = ?");
+        $stmtUsuario->execute([$correo]);
+        $usuarioActualId = $stmtUsuario->fetchColumn();
+
+        if (!$usuarioActualId) {
+            Flight::json(["message" => "Usuario no encontrado."], 404);
+            return;
         }
 
-        $stmt = $pdo->prepare("SELECT id FROM archivos WHERE nombre = ? AND ruta = ? AND propietario = ?");
-        $stmt->execute([$nombre, $directorioId, $userID]);
+        if ($tipo === 'archivo') {
+            $stmtDir = $pdo->prepare("SELECT id FROM directorios WHERE nombre = ? AND propietario = ?");
+            $stmtDir->execute([$rutaFisica, $usuarioActualId]);
+            $directorioId = $stmtDir->fetchColumn();
+
+            if (!$directorioId) {
+                Flight::json(["message" => "Directorio no encontrado."], 404);
+                return;
+            }
+
+            $stmtArchivo = $pdo->prepare("
+                SELECT a.id 
+                FROM archivos a
+                INNER JOIN comparticion c ON c.archivo = a.id
+                WHERE a.nombre = ? 
+                  AND a.ruta = ?
+                  AND c.usuario_destinatario = ?
+                  AND c.permiso = 'copropietario'
+                  AND c.estado = 'activo'
+                LIMIT 1
+            ");
+            $stmtArchivo->execute([$nombre, $directorioId, $userID]);
+            $id = $stmtArchivo->fetchColumn();
+        } else {
+            $stmtPadre = $pdo->prepare("SELECT id FROM directorios WHERE nombre = ? AND propietario = ?");
+            $stmtPadre->execute([$rutaFisica, $usuarioActualId]);
+            $rutaPadreId = $stmtPadre->fetchColumn();
+
+            if (!$rutaPadreId) {
+                Flight::json(["message" => "Ruta padre no encontrada."], 404);
+                return;
+            }
+
+            $stmtDir = $pdo->prepare("
+                SELECT d.id 
+                FROM directorios d
+                INNER JOIN comparticion c ON c.directorio = d.id
+                WHERE d.nombre = ?
+                  AND d.ruta_padre = ?
+                  AND c.usuario_destinatario = ?
+                  AND c.permiso = 'copropietario'
+                  AND c.estado = 'activo'
+                LIMIT 1
+            ");
+            $stmtDir->execute([$nombre, $rutaPadreId, $userID]);
+            $id = $stmtDir->fetchColumn();
+        }
+
+        if (!$id) {
+            Flight::json(["message" => "No tienes permisos para compartir este elemento."], 403);
+            return;
+        }
+
+        $esCompartido = true;
     } else {
-        $stmt = $pdo->prepare("SELECT id FROM directorios WHERE nombre = ? AND ruta_padre = (SELECT id FROM directorios WHERE nombre = ? AND propietario = ?) AND propietario = ?");
-        $stmt->execute([$nombre, $rutaFisica, $userID, $userID]);
+        if ($tipo === 'archivo') {
+            $stmt = $pdo->prepare("SELECT id FROM directorios WHERE nombre = ? AND propietario = ?");
+            $stmt->execute([$rutaFisica, $userID]);
+            $directorioId = $stmt->fetchColumn();
+
+            if ($directorioId === false) {
+                Flight::halt(404, "Directorio no encontrado");
+            }
+
+            $stmt = $pdo->prepare("SELECT id FROM archivos WHERE nombre = ? AND ruta = ? AND propietario = ?");
+            $stmt->execute([$nombre, $directorioId, $userID]);
+        } else {
+            $stmt = $pdo->prepare("SELECT id FROM directorios WHERE nombre = ? AND ruta_padre = (SELECT id FROM directorios WHERE nombre = ? AND propietario = ?) AND propietario = ?");
+            $stmt->execute([$nombre, $rutaFisica, $userID, $userID]);
+        }
+
+        $id = $stmt->fetchColumn();
+
+        if (!$id) {
+            Flight::halt(404, "No se encontró el elemento a compartir");
+        }
     }
 
-    $id = $stmt->fetchColumn();
-
-    if (!$id) {
-        Flight::halt(404, "No se encontró el elemento a compartir");
-    }
-
-    $compartidos = [];
-
-    // 1. Obtener destinatarios actuales
     $stmtExistentes = $pdo->prepare("
         SELECT usuario_destinatario, permiso 
         FROM comparticion 
-        WHERE estado = 'activo' AND propietario = ? AND " . ($tipo === 'archivo' ? "archivo = ?" : "directorio = ?")
+        WHERE estado = 'activo' 
+        AND " . ($esCompartido ? "propietario = ?" : "1=1") . "
+        AND " . ($tipo === 'archivo' ? "archivo = ?" : "directorio = ?")
     );
-    $stmtExistentes->execute([$userID, $id]);
-    $existentes = $stmtExistentes->fetchAll(PDO::FETCH_KEY_PAIR); // [usuario_id => permiso]
 
-    // 2. Procesar nuevos destinatarios
+    $esCompartido ? $stmtExistentes->execute([$userID, $id]) : $stmtExistentes->execute([$id]);
+    $existentes = $stmtExistentes->fetchAll(PDO::FETCH_KEY_PAIR);
+
     $procesados = [];
+    $compartidos = [];
 
     foreach ($correos as $entry) {
-        $correo = $entry["correo"] ?? null;
+        $correoDest = $entry["correo"] ?? null;
         $permiso = $entry["permiso"] ?? "lector";
 
-        if (!$correo || !in_array($permiso, ["copropietario", "lector"])) {
+        if (!$correoDest || !in_array($permiso, ["copropietario", "lector"])) {
             $compartidos[] = [
-                "email" => $correo,
+                "email" => $correoDest,
                 "estado" => "fallo",
                 "razon" => "Correo inválido o permiso no permitido"
             ];
@@ -1378,14 +1447,23 @@ Flight::route('POST /shared', function () {
         }
 
         $stmtUser = $pdo->prepare("SELECT id FROM usuarios WHERE email = ?");
-        $stmtUser->execute([$correo]);
+        $stmtUser->execute([$correoDest]);
         $destinatarioId = $stmtUser->fetchColumn();
 
         if (!$destinatarioId) {
             $compartidos[] = [
-                "email" => $correo,
+                "email" => $correoDest,
                 "estado" => "fallo",
                 "razon" => "Usuario no encontrado"
+            ];
+            continue;
+        }
+
+        if ($correo && $destinatarioId == $usuarioActualId) {
+            $compartidos[] = [
+                "email" => $correoDest,
+                "estado" => "fallo",
+                "razon" => "No puedes compartir con el propietario real"
             ];
             continue;
         }
@@ -1393,28 +1471,26 @@ Flight::route('POST /shared', function () {
         $procesados[] = $destinatarioId;
 
         if (array_key_exists($destinatarioId, $existentes)) {
-            // Ya existe → ¿cambió el permiso?
             if ($existentes[$destinatarioId] !== $permiso) {
                 $update = $pdo->prepare("
                     UPDATE comparticion 
                     SET permiso = ?
-                    WHERE propietario = ? AND usuario_destinatario = ? AND " . ($tipo === 'archivo' ? "archivo = ?" : "directorio = ?")
+                    WHERE usuario_destinatario = ? AND " . ($tipo === 'archivo' ? "archivo = ?" : "directorio = ?")
                 );
-                $update->execute([$permiso, $userID, $destinatarioId, $id]);
+                $update->execute([$permiso, $destinatarioId, $id]);
 
                 $compartidos[] = [
-                    "email" => $correo,
+                    "email" => $correoDest,
                     "estado" => "actualizado",
                     "razon" => "Permiso modificado"
                 ];
             } else {
                 $compartidos[] = [
-                    "email" => $correo,
+                    "email" => $correoDest,
                     "estado" => "sin cambios"
                 ];
             }
         } else {
-            // Nuevo → Insertar
             $insert = $pdo->prepare("
                 INSERT INTO comparticion (propietario, permiso, estado, usuario_destinatario, archivo, directorio)
                 VALUES (?, ?, 'activo', ?, ?, ?)
@@ -1426,10 +1502,8 @@ Flight::route('POST /shared', function () {
             }
 
             $comparticionId = $pdo->lastInsertId();
+            $mensajeNotif = "Has recibido acceso " . ($permiso === 'copropietario' ? "como copropietario" : "como lector") . " al $tipo '$nombre'.";
 
-            // Notificación
-            $mensajeNotif = "Has recibido acceso " . ($permiso === 'copropietario' ? "como copropietario" : "como lector") .
-                " al " . ($tipo === 'archivo' ? "archivo" : "directorio") . " '$nombre'.";
             $noti = $pdo->prepare("
                 INSERT INTO notificaciones (tipo, mensaje, propietario, comparticion)
                 VALUES ('informacion', ?, ?, ?)
@@ -1437,24 +1511,25 @@ Flight::route('POST /shared', function () {
             $noti->execute([$mensajeNotif, $destinatarioId, $comparticionId]);
 
             $compartidos[] = [
-                "email" => $correo,
+                "email" => $correoDest,
                 "estado" => "nuevo"
             ];
         }
     }
 
-    // 3. Eliminar destinatarios que ya no están
-    foreach ($existentes as $usuarioId => $permisoActual) {
-        if (!in_array($usuarioId, $procesados)) {
-            $delete = $pdo->prepare("
-                DELETE FROM comparticion
-                WHERE propietario = ? AND usuario_destinatario = ? AND " . ($tipo === 'archivo' ? "archivo = ?" : "directorio = ?")
+    foreach ($existentes as $revocarId => $permiso) {
+        if (!in_array($revocarId, $procesados)) {
+            $revocar = $pdo->prepare("
+                UPDATE comparticion 
+                SET estado = 'revocado'
+                WHERE usuario_destinatario = ? AND " . ($tipo === 'archivo' ? "archivo = ?" : "directorio = ?")
             );
-            $delete->execute([$userID, $usuarioId, $id]);
+            $revocar->execute([$revocarId, $id]);
 
             $compartidos[] = [
-                "email" => "ID $usuarioId",
-                "estado" => "eliminado"
+                "email" => $revocarId,
+                "estado" => "revocado",
+                "razon" => "Revocado por el propietario real"
             ];
         }
     }
@@ -1462,6 +1537,88 @@ Flight::route('POST /shared', function () {
     Flight::json([
         "message" => "Compartición actualizada",
         "resultados" => $compartidos
+    ], 200);
+});
+
+Flight::route('GET /shared-owner', function () {
+    global $pdo;
+
+    if (!isset($_COOKIE['auth'])) {
+        Flight::json(["error" => "No se encontró la cookie de autenticación."], 401);
+        return;
+    }
+
+    $jwt = $_COOKIE['auth'];
+    $decoded = JWTHandler::decode($jwt);
+
+    if (!$decoded || !isset($decoded['data'])) {
+        Flight::json(["message" => "Token inválido o expirado."], 401);
+        return;
+    }
+
+    $userData = (array) $decoded["data"];
+    if (!isset($userData["id"])) {
+        Flight::json(["message" => "Usuario no válido."], 401);
+        return;
+    }
+
+    $usuarioActualId = $userData["id"];
+
+    // Obtener compartidos del propietario con el usuario que consulta
+    $stmtCompartidos = $pdo->prepare("
+    SELECT 
+        c.permiso,
+        c.archivo,
+        c.directorio,
+        u.email AS destinatario_email,
+        a.nombre AS nombre_archivo,
+        a.fecha AS fecha_archivo,
+        a.tamaño AS tamaño_archivo,
+        d.nombre AS nombre_directorio,
+        d.fecha_creacion AS fecha_directorio
+    FROM comparticion c
+    INNER JOIN usuarios u ON c.usuario_destinatario = u.id
+    LEFT JOIN archivos a ON c.archivo = a.id
+    LEFT JOIN directorios d ON c.directorio = d.id
+    WHERE c.propietario = ?
+      AND c.estado = 'activo'
+      AND (
+        (c.archivo IS NOT NULL AND a.propietario != ?) 
+        OR 
+        (c.directorio IS NOT NULL AND d.propietario != ?)
+      )
+    ");
+    $stmtCompartidos->execute([$usuarioActualId, $usuarioActualId, $usuarioActualId]);
+
+    $registros = $stmtCompartidos->fetchAll(PDO::FETCH_ASSOC);
+
+    $resultado = [];
+
+    foreach ($registros as $row) {
+        if ($row["archivo"]) {
+            $resultado[] = [
+                "nombre" => $row["nombre_archivo"],
+                "fecha" => $row["fecha_archivo"],
+                "tamaño" => (int) $row["tamaño_archivo"],
+                "permiso" => $row["permiso"],
+                "destinatario_email" => $row["destinatario_email"],
+                "tipo" => "archivo"
+            ];
+        } elseif ($row["directorio"]) {
+            $resultado[] = [
+                "nombre" => $row["nombre_directorio"],
+                "fecha" => $row["fecha_directorio"],
+                "tamaño" => null,
+                "permiso" => $row["permiso"],
+                "destinatario_email" => $row["destinatario_email"],
+                "tipo" => "directorio"
+            ];
+        }
+    }
+
+    Flight::json([
+        "message" => "Compartidos encontrados",
+        "compartidos" => $resultado
     ], 200);
 });
 
@@ -1639,9 +1796,9 @@ Flight::route('POST /unshared', function () {
         $update = $pdo->prepare("
             UPDATE comparticion 
             SET estado = 'revocado'
-            WHERE propietario = ? AND " . ($tipo === 'archivo' ? "archivo = ?" : "directorio = ?")
+            WHERE " . ($tipo === 'archivo' ? "archivo = ?" : "directorio = ?")
         );
-        $update->execute([$userID, $id]);
+        $update->execute([$id]);
 
         // Enviar notificación solo a los usuarios que tenían acceso a este elemento
         foreach ($currentData as $data) {
@@ -1898,6 +2055,7 @@ Flight::route('POST /shared-dir', function () {
     // Verificar si algún padre está compartido
     $pathParts = explode("/", $directorio);
     $foundSharedParent = false;
+    $permissionType = null;
 
     while (count($pathParts) > 0) {
         $possiblePath = implode("/", $pathParts);
@@ -1909,17 +2067,18 @@ Flight::route('POST /shared-dir', function () {
         if ($dir) {
             $directoryId = $dir['id'];
 
-            $stmt = $pdo->prepare("SELECT * FROM comparticion WHERE directorio = ? AND usuario_destinatario = ? AND estado = 'activo'");
+            $stmt = $pdo->prepare("SELECT permiso FROM comparticion WHERE directorio = ? AND usuario_destinatario = ? AND estado = 'activo'");
             $stmt->execute([$directoryId, $currentUserId]);
             $shared = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($shared) {
                 $foundSharedParent = true;
+                $permissionType = $shared['permiso'];
                 break;
             }
         }
 
-        array_pop($pathParts); // Subir un nivel
+        array_pop($pathParts);
     }
 
     if (!$foundSharedParent) {
@@ -1935,12 +2094,25 @@ Flight::route('POST /shared-dir', function () {
         Flight::jsonHalt(["message" => "Error escaneando el directorio."], 500);
     }
 
-    // ✅ Corregido: evitar doble "contenido"
+    // 🔥 Ahora añadimos el permiso a cada ítem del contenido
+    $finalContent = [];
+
     if (isset($contents['contenido']) && is_array($contents['contenido'])) {
-        Flight::json(["contenido" => $contents['contenido']], 200);
-    } else {
-        Flight::json(["contenido" => $contents], 200);
+        foreach ($contents['contenido'] as $item) {
+            $item['permiso'] = $permissionType; // añadimos permiso a cada elemento
+            $finalContent[] = $item;
+        }
+    } else if (is_array($contents)) {
+        foreach ($contents as $item) {
+            $item['permiso'] = $permissionType; // en caso de que no haya clave 'contenido'
+            $finalContent[] = $item;
+        }
     }
+
+    // Respondemos
+    Flight::json([
+        "contenido" => $finalContent
+    ], 200);
 });
 
 Flight::route('POST /shared-download', function () {
@@ -1966,7 +2138,7 @@ Flight::route('POST /shared-download', function () {
         return;
     }
 
-    $requesterID = $userData["id"]; // Usuario autenticado que realiza la petición
+    $requesterID = $userData["id"];
 
     // Obtener datos desde POST
     $email = $_POST['email'] ?? null;
@@ -1978,7 +2150,7 @@ Flight::route('POST /shared-download', function () {
         return;
     }
 
-    // Obtener el ID del usuario dueño de los archivos
+    // Obtener el ID del usuario dueño
     $stmt = $pdo->prepare("SELECT id FROM usuarios WHERE email = ?");
     $stmt->execute([$email]);
     $ownerID = $stmt->fetchColumn();
@@ -1988,7 +2160,6 @@ Flight::route('POST /shared-download', function () {
         return;
     }
 
-    // Continuar con la lógica usando el ownerID
     $baseDir = "/var/shared/$ownerID";
     $targetPath = $directorio === "/" ? "$baseDir/$nombre" : "$baseDir/$directorio/$nombre";
 
@@ -2006,58 +2177,87 @@ Flight::route('POST /shared-download', function () {
         return;
     }
 
-    // Resto del código para desencriptar archivo o carpeta...
-    // Verifica si un archivo o directorio, o alguno de sus padres, está compartido
-    function esCompartidoODerivado($rutaAbsoluta, $pdo) {
-        $stmt = $pdo->prepare("SELECT id, ruta FROM archivos WHERE nombre = :nombre");
-        $stmt->execute([':nombre' => basename($rutaAbsoluta)]);
+    // Funciones de verificación
+    function archivoCompartido($nombreArchivo, $ownerID, $directorioRutaID, $pdo) {
+        $stmt = $pdo->prepare("SELECT id, ruta FROM archivos WHERE nombre = :nombre AND propietario = :propietario AND ruta = :ruta");
+        $stmt->execute([
+            ':nombre' => $nombreArchivo,
+            ':propietario' => $ownerID,
+            ':ruta' => $directorioRutaID
+        ]);
+    
         $archivo = $stmt->fetch(PDO::FETCH_ASSOC);
-
+    
         if (!$archivo) return false;
+    
+        // Verificar si el archivo está compartido directamente
+        $stmtComp = $pdo->prepare("SELECT 1 FROM comparticion WHERE archivo = :id AND estado = 'activo'");
+        $stmtComp->execute([':id' => $archivo['id']]);
+        if ($stmtComp->fetch()) return true;
+    
+        // Si no, verificar si el directorio o sus padres están compartidos
+        return directorioCompartidoPorID($archivo['ruta'], $pdo);
+    }    
 
-        while ($archivo) {
-            $stmtComp = $pdo->prepare("SELECT 1 FROM comparticion WHERE archivo = :id AND estado = 'activo'");
-            $stmtComp->execute([':id' => $archivo['id']]);
-            if ($stmtComp->fetch()) return true;
-
-            $stmtDir = $pdo->prepare("SELECT id, ruta_padre FROM directorios WHERE id = :id");
-            $stmtDir->execute([':id' => $archivo['ruta']]);
-            $archivo = $stmtDir->fetch(PDO::FETCH_ASSOC);
+    function obtenerIDDirectorio($ownerID, $nombreDirectorio, $pdo) {
+        if ($nombreDirectorio === "/") {
+            // Buscar el directorio raíz
+            $stmt = $pdo->prepare("SELECT id FROM directorios WHERE nombre = '/' AND propietario = :propietario AND ruta_padre IS NULL");
+        } else {
+            // Buscar un directorio normal
+            $stmt = $pdo->prepare("SELECT id FROM directorios WHERE nombre = :nombre AND propietario = :propietario");
+            $stmt->execute([
+                ':nombre' => basename($nombreDirectorio),
+                ':propietario' => $ownerID
+            ]);
+            return $stmt->fetchColumn();
         }
-
-        return false;
-    }
-
-    function esDirectorioCompartidoODerivado($rutaAbsoluta, $pdo) {
-        $stmt = $pdo->prepare("SELECT id, ruta_padre FROM directorios WHERE nombre = :nombre");
-        $stmt->execute([':nombre' => basename($rutaAbsoluta)]);
+    
+        $stmt->execute([':propietario' => $ownerID]);
+        return $stmt->fetchColumn();
+    }    
+     
+    function directorioCompartidoPorID($idDirectorio, $pdo) {
+        if (!$idDirectorio) return false;
+    
+        $stmt = $pdo->prepare("SELECT id, ruta_padre FROM directorios WHERE id = :id");
+        $stmt->execute([':id' => $idDirectorio]);
         $directorio = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if (!$directorio) return false;
-
+    
         while ($directorio) {
             $stmtComp = $pdo->prepare("SELECT 1 FROM comparticion WHERE directorio = :id AND estado = 'activo'");
             $stmtComp->execute([':id' => $directorio['id']]);
             if ($stmtComp->fetch()) return true;
-
+    
             if (!$directorio['ruta_padre']) break;
-
-            $stmtPadre = $pdo->prepare("SELECT id, ruta_padre FROM directorios WHERE id = :id");
-            $stmtPadre->execute([':id' => $directorio['ruta_padre']]);
-            $directorio = $stmtPadre->fetch(PDO::FETCH_ASSOC);
+    
+            $stmt = $pdo->prepare("SELECT id, ruta_padre FROM directorios WHERE id = :id");
+            $stmt->execute([':id' => $directorio['ruta_padre']]);
+            $directorio = $stmt->fetch(PDO::FETCH_ASSOC);
         }
-
+    
         return false;
+    }    
+
+    function directorioCompartido($nombreDirectorio, $pdo) {
+        $stmt = $pdo->prepare("SELECT id, ruta_padre FROM directorios WHERE nombre = :nombre");
+        $stmt->execute([':nombre' => $nombreDirectorio]);
+        $directorio = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$directorio) return false;
+
+        return directorioCompartidoPorID($directorio['id'], $pdo);
     }
 
-    // Verificación de permisos antes de continuar
+    // Verificación de permisos
     if (is_file($targetPath)) {
-        if (!esCompartidoODerivado($targetPath, $pdo)) {
-            Flight::json(["message" => "No autorizado. El archivo no está compartido."], 403);
+        $directorioRutaID = obtenerIDDirectorio($ownerID, $directorio, $pdo);
+        if (!archivoCompartido($nombre, $ownerID, $directorioRutaID, $pdo)) {
+            Flight::json(["message" => "No autorizado. El archivo no está compartido ni pertenece a un directorio compartido."], 403);
             return;
         }
     } else if (is_dir($targetPath)) {
-        if (!esDirectorioCompartidoODerivado($targetPath, $pdo)) {
+        if (!directorioCompartido(basename($targetPath), $pdo)) {
             Flight::json(["message" => "No autorizado. El directorio no está compartido."], 403);
             return;
         }
@@ -2066,6 +2266,7 @@ Flight::route('POST /shared-download', function () {
         return;
     }
 
+    // Procesos de descarga normales (como ya tenías)...
     if (is_file($targetPath)) {
         $nombreLimpio = preg_replace('/\.cbk$/', '', $nombre);
         $extension = pathinfo($nombreLimpio, PATHINFO_EXTENSION);
@@ -2104,11 +2305,9 @@ Flight::route('POST /shared-download', function () {
         );
 
         $archivosAgregados = 0;
-
         foreach ($iterator as $fileInfo) {
             if ($fileInfo->isFile()) {
                 $inputPath = $fileInfo->getPathname();
-
                 if (strtolower(pathinfo($inputPath, PATHINFO_EXTENSION)) === 'cbk') {
                     $relativePath = substr($inputPath, strlen($targetPath) + 1);
                     $nombreFinal = preg_replace('/\.cbk$/i', '', $relativePath);
@@ -2146,15 +2345,246 @@ Flight::route('POST /shared-download', function () {
 
         readfile($zipPath);
         unlink($zipPath);
-    }else {
+    } else {
         Flight::json(["message" => "Tipo de archivo no compatible"], 400);
     }
-
 });
 
+Flight::route('POST /revoke-share', function () {
+    global $pdo;
 
+    if (!isset($_COOKIE['auth'])) {
+        Flight::json(["error" => "No se encontró la cookie de autenticación."], 401);
+        return;
+    }
+
+    $jwt = $_COOKIE['auth'];
+    $decoded = JWTHandler::decode($jwt);
+
+    if (!$decoded || !isset($decoded['data'])) {
+        Flight::json(["message" => "Token inválido o expirado."], 401);
+        return;
+    }
+
+    $userData = (array) $decoded["data"];
+    $usuarioActualId = $userData["id"] ?? null;
+
+    if (!$usuarioActualId) {
+        Flight::json(["message" => "Usuario no válido."], 401);
+        return;
+    }
+
+    $jsonData = file_get_contents("php://input");
+    $data = json_decode($jsonData, true);
+
+    $emailPropietario = $data["propietario"] ?? null;
+    $tipo = $data["tipo"] ?? null;
+    $nombre = $data["nombre"] ?? null;
+
+    if (!$emailPropietario || !$tipo || !$nombre) {
+        Flight::json(["message" => "Faltan datos requeridos (propietario, tipo, nombre)."], 400);
+        return;
+    }
+
+    // Buscar ID del propietario por email
+    $stmtUsuario = $pdo->prepare("SELECT id FROM usuarios WHERE email = ?");
+    $stmtUsuario->execute([$emailPropietario]);
+    $propietarioId = $stmtUsuario->fetchColumn();
+
+    if (!$propietarioId) {
+        Flight::json(["message" => "Propietario no encontrado."], 404);
+        return;
+    }
+
+    // Buscar los registros compartidos usando la misma consulta
+    $stmt = $pdo->prepare("
+        SELECT 
+            c.id,
+            c.archivo,
+            c.directorio,
+            a.nombre AS nombre_archivo,
+            d.nombre AS nombre_directorio
+        FROM comparticion c
+        INNER JOIN usuarios u ON c.usuario_destinatario = u.id
+        LEFT JOIN archivos a ON c.archivo = a.id
+        LEFT JOIN directorios d ON c.directorio = d.id
+        WHERE c.propietario = ?
+          AND c.estado = 'activo'
+          AND (
+            (c.archivo IS NOT NULL AND a.propietario = ?) 
+            OR 
+            (c.directorio IS NOT NULL AND d.propietario = ?)
+          )
+    ");
+    $stmt->execute([$usuarioActualId, $propietarioId, $propietarioId]);
+    $registros = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $idsARevocar = [];
+
+    foreach ($registros as $r) {
+        if ($tipo === 'archivo' && $r['archivo'] && $r['nombre_archivo'] === $nombre) {
+            $idsARevocar[] = $r['id'];
+        } elseif ($tipo === 'directorio' && $r['directorio'] && $r['nombre_directorio'] === $nombre) {
+            $idsARevocar[] = $r['id'];
+        }
+    }
+
+    if (empty($idsARevocar)) {
+        Flight::json(["message" => "No se encontraron comparticiones para revocar."], 404);
+        return;
+    }
+
+    // Revocar todos los registros encontrados
+    $placeholders = implode(',', array_fill(0, count($idsARevocar), '?'));
+    $stmtUpdate = $pdo->prepare("UPDATE comparticion SET estado = 'revocado' WHERE id IN ($placeholders)");
+    $stmtUpdate->execute($idsARevocar);
+
+    Flight::json([
+        "message" => "Compartición(es) revocada(s) correctamente.",
+        "revocados" => count($idsARevocar)
+    ], 200);
+});
+
+Flight::route('POST /create-group', function () {
+    global $pdo;
+
+    // Obtén el JSON enviado
+    $data = json_decode(file_get_contents('php://input'), true);
+    
+    // Verifica si el JSON contiene los datos necesarios
+    if (!isset($data['name']) || !isset($data['description']) || !isset($data['emails']) || !is_array($data['emails'])) {
+        Flight::json(['error' => 'Faltan parámetros en el JSON'], 400);
+        return;
+    }
+
+    // Obtener la cookie (ID del usuario autenticado)
+    $jwt = $_COOKIE['auth'];
+    $decoded = JWTHandler::decode($jwt);
+
+    if (!$decoded || !isset($decoded['data'])) {
+        Flight::json(["message" => "Token inválido o expirado."], 401);
+        return;
+    }
+
+    $userData = (array) $decoded["data"];
+    $usuarioActualId = $userData["id"] ?? null;
+
+    // Obtener el email del usuario autenticado
+    $stmt = $pdo->prepare("SELECT email FROM usuarios WHERE id = ?");
+    $stmt->execute([$usuarioActualId]);
+    $usuarioActual = $stmt->fetch(PDO::FETCH_ASSOC);
+    $usuarioActualEmail = $usuarioActual['email'] ?? null;
+
+    // Verifica si el email del usuario actual está en el array de correos
+    if (!in_array($usuarioActualEmail, $data['emails'])) {
+        Flight::json(['error' => 'El correo del usuario autenticado no está en la lista de correos.'], 400);
+        return;
+    }
+
+    // Ingresar el grupo en la tabla grupos
+    $stmt = $pdo->prepare("INSERT INTO grupos (nombre, descripcion) VALUES (?, ?)");
+    $stmt->execute([$data['name'], $data['description']]);
+    $grupoId = $pdo->lastInsertId();  // Obtén el ID del nuevo grupo
+
+    // Insertar los usuarios en la tabla de usuarios si no existen
+    foreach ($data['emails'] as $email) {
+        $stmt = $pdo->prepare("SELECT id FROM usuarios WHERE email = ?");
+        $stmt->execute([$email]);
+        $usuario = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        // Si el usuario no existe, lo insertamos
+        if (!$usuario) {
+            // Aquí puedes agregar datos como el nombre y apellidos del usuario si los tienes
+            // En este ejemplo asumimos que el nombre y apellidos son nulos o vienen del frontend
+            $usuarioId = uniqid(); // Generar un ID único para el usuario (puedes cambiarlo según tus necesidades)
+            $stmt = $pdo->prepare("INSERT INTO usuarios (id, nombre, apellidos, email, password_hash) VALUES (?, ?, ?, ?, ?)");
+            $stmt->execute([$usuarioId, 'NombrePorDefecto', 'ApellidoPorDefecto', $email, '']); // Cambiar según las necesidades
+        } else {
+            $usuarioId = $usuario['id']; // Si ya existe, usamos su ID
+        }
+
+        // Ahora asociamos el usuario con el grupo en usuarios_grupos
+        $stmt = $pdo->prepare("INSERT INTO usuarios_grupos (usuario, grupo) VALUES (?, ?)");
+        $stmt->execute([$usuarioId, $grupoId]);
+    }
+
+    // Respuesta de éxito
+    Flight::json(['success' => 'Grupo creado y usuarios asociados'], 200);
+});
+
+Flight::route('GET /groups', function () use ($pdo) {
+    // Obtener el JWT de la cookie
+    $jwt = $_COOKIE['auth'] ?? null;
+
+    // Si no se encuentra el token, devolver error
+    if (!$jwt) {
+        Flight::json(['error' => 'Token no proporcionado en la cookie'], 401);
+        return;
+    }
+
+    // Decodificar el JWT
+    $decoded = JWTHandler::decode($jwt);
+
+    // Si el token es inválido o expirado
+    if (!$decoded || !isset($decoded['data'])) {
+        Flight::json(['error' => 'Token inválido o expirado'], 401);
+        return;
+    }
+
+    // Obtener el ID del usuario
+    $userData = (array) $decoded["data"];
+    $usuarioActualId = $userData["id"] ?? null;
+
+    // Verificar si el ID del usuario está presente
+    if (!$usuarioActualId) {
+        Flight::json(['error' => 'Usuario no encontrado en el token'], 401);
+        return;
+    }
+
+    // Consultar los grupos en los que el usuario está inscrito, junto con los correos de todos los usuarios en esos grupos
+    $stmt = $pdo->prepare("
+        SELECT g.id, g.nombre, g.descripcion, u.email
+        FROM grupos g
+        JOIN usuarios_grupos ug ON g.id = ug.grupo
+        JOIN usuarios u ON ug.usuario = u.id
+        WHERE ug.grupo IN (
+            SELECT grupo 
+            FROM usuarios_grupos 
+            WHERE usuario = ?
+        )
+    ");
+    $stmt->execute([$usuarioActualId]);
+
+    // Obtener los grupos del usuario, junto con los correos
+    $grupos = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Si no tiene grupos, devolver mensaje de error
+    if (empty($grupos)) {
+        Flight::json(['message' => 'No estás inscrito en ningún grupo'], 200);
+        return;
+    }
+
+    // Organizar los datos para que cada grupo contenga los correos de los usuarios
+    $gruposConCorreos = [];
+    foreach ($grupos as $grupo) {
+        $grupoId = $grupo['id'];
+        if (!isset($gruposConCorreos[$grupoId])) {
+            $gruposConCorreos[$grupoId] = [
+                'id' => $grupoId,
+                'nombre' => $grupo['nombre'],
+                'descripcion' => $grupo['descripcion'],
+                'emails' => []
+            ];
+        }
+        $gruposConCorreos[$grupoId]['emails'][] = $grupo['email'];
+    }
+
+    // Convertir el arreglo de grupos con los correos a un formato adecuado
+    $gruposFinal = array_values($gruposConCorreos);
+
+    // Devolver los grupos con los correos de los usuarios asociados
+    Flight::json(['grupos' => $gruposFinal], 200);
+});
 
 Flight::start();
-
-
 ?>
