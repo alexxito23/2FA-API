@@ -2494,11 +2494,7 @@ Flight::route('POST /create-group', function () {
 
         // Si el usuario no existe, lo insertamos
         if (!$usuario) {
-            // Aquí puedes agregar datos como el nombre y apellidos del usuario si los tienes
-            // En este ejemplo asumimos que el nombre y apellidos son nulos o vienen del frontend
-            $usuarioId = uniqid(); // Generar un ID único para el usuario (puedes cambiarlo según tus necesidades)
-            $stmt = $pdo->prepare("INSERT INTO usuarios (id, nombre, apellidos, email, password_hash) VALUES (?, ?, ?, ?, ?)");
-            $stmt->execute([$usuarioId, 'NombrePorDefecto', 'ApellidoPorDefecto', $email, '']); // Cambiar según las necesidades
+            Flight::jsonHalt(['error' => 'Algunos correos no existen.'], 400);
         } else {
             $usuarioId = $usuario['id']; // Si ya existe, usamos su ID
         }
@@ -2509,7 +2505,7 @@ Flight::route('POST /create-group', function () {
     }
 
     // Respuesta de éxito
-    Flight::json(['success' => 'Grupo creado y usuarios asociados'], 200);
+    Flight::json(['message' => 'Grupo creado y usuarios asociados'], 200);
 });
 
 Flight::route('GET /groups', function () use ($pdo) {
@@ -2584,6 +2580,78 @@ Flight::route('GET /groups', function () use ($pdo) {
 
     // Devolver los grupos con los correos de los usuarios asociados
     Flight::json(['grupos' => $gruposFinal], 200);
+});
+
+Flight::route('POST /delete-group', function () {
+    global $pdo;
+
+    // Leer el JSON con el nombre del grupo
+    $data = json_decode(file_get_contents('php://input'), true);
+    if (!isset($data['name'])) {
+        Flight::json(['error' => 'Falta el nombre del grupo'], 400);
+        return;
+    }
+    $groupName = $data['name'];
+
+    // Obtener el usuario desde la cookie JWT
+    $jwt = $_COOKIE['auth'] ?? null;
+    $decoded = JWTHandler::decode($jwt);
+
+    if (!$decoded || !isset($decoded['data'])) {
+        Flight::json(["message" => "Token inválido o expirado."], 401);
+        return;
+    }
+
+    $userData = (array) $decoded["data"];
+    $usuarioActualId = $userData["id"] ?? null;
+
+    // Obtener el email del usuario autenticado
+    $stmt = $pdo->prepare("SELECT email FROM usuarios WHERE id = ?");
+    $stmt->execute([$usuarioActualId]);
+    $usuarioActual = $stmt->fetch(PDO::FETCH_ASSOC);
+    $usuarioActualEmail = $usuarioActual['email'] ?? null;
+
+    if (!$usuarioActualEmail) {
+        Flight::json(['error' => 'No se pudo obtener el correo del usuario'], 500);
+        return;
+    }
+
+    // Buscar el grupo por nombre
+    $stmt = $pdo->prepare("SELECT id FROM grupos WHERE nombre = ?");
+    $stmt->execute([$groupName]);
+    $grupo = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$grupo) {
+        Flight::json(['error' => 'Grupo no encontrado'], 404);
+        return;
+    }
+
+    $grupoId = $grupo['id'];
+
+    // Obtener los correos asociados al grupo
+    $stmt = $pdo->prepare("
+        SELECT u.email FROM usuarios_grupos ug
+        JOIN usuarios u ON ug.usuario = u.id
+        WHERE ug.grupo = ?
+    ");
+    $stmt->execute([$grupoId]);
+    $emails = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+    // Verificar si el email del usuario está en la lista
+    if (!in_array($usuarioActualEmail, $emails)) {
+        Flight::json(['error' => 'No tienes permiso para eliminar este grupo'], 403);
+        return;
+    }
+
+    // Eliminar asociaciones de usuarios con el grupo
+    $stmt = $pdo->prepare("DELETE FROM usuarios_grupos WHERE grupo = ?");
+    $stmt->execute([$grupoId]);
+
+    // Eliminar el grupo
+    $stmt = $pdo->prepare("DELETE FROM grupos WHERE id = ?");
+    $stmt->execute([$grupoId]);
+
+    Flight::json(['message' => 'Grupo y asociaciones eliminados correctamente'], 200);
 });
 
 Flight::start();
