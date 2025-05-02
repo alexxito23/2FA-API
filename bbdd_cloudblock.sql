@@ -51,22 +51,6 @@ CREATE TABLE almacenamiento (
     FOREIGN KEY (propietario) REFERENCES usuarios(id)
 );
 
-CREATE TABLE logs (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    evento VARCHAR(11) NOT NULL,
-    descripcion TEXT NOT NULL,
-    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
-  	ip_origen VARCHAR(15) NOT NULL,
-    estado VARCHAR(7) DEFAULT 'exitoso' NOT NULL,
-  	propietario VARCHAR(32) NOT NULL,
-  	archivo INT NULL,
-  	CHECK (evento IN ('error', 'informacion', 'advertencia', 'seguridad', 'otro')),
-  	CHECK (ip_origen REGEXP '^([0-9]{1,3}\.){3}[0-9]{1,3}$'),
-  	CHECK (estado IN ('exitoso', 'fallido')),
-  	FOREIGN KEY (propietario) REFERENCES usuarios(id),
-  	FOREIGN key (archivo) REFERENCES archivos(id)
-);
-
 CREATE TABLE token (
     token VARCHAR(100) PRIMARY KEY,
     fecha_validacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -137,16 +121,10 @@ CREATE TABLE notificaciones (
     mensaje TEXT NOT NULL,
     fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     fecha_lectura TIMESTAMP NULL,
-    evento INT NULL,
   	comparticion INT NULL,
     propietario VARCHAR(32) NOT NULL,
     leida BOOLEAN DEFAULT false NOT NULL,
-	  CHECK (tipo IN ('seguridad', 'informacion', 'advertencia', 'sistema', 'actividad')),
-    CHECK (
-        (evento IS NOT NULL AND comparticion IS NULL) OR
-        (evento IS NULL AND comparticion IS NOT NULL)
-    ),
-    FOREIGN KEY (evento) REFERENCES logs(id),
+	  CHECK (tipo IN ('seguridad', 'informacion')),
   	FOREIGN KEY (comparticion) REFERENCES comparticion(id),
   	FOREIGN KEY (propietario) REFERENCES usuarios(id)
 );

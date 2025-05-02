@@ -8,41 +8,35 @@ require '../vendor/autoload.php';
 
 // Definir la ruta para obtener todos los usuarios
 Flight::route('POST /register', function() {
-
     global $pdo;
     $cache = require '../config/cache.php';
-    // Leer los datos JSON del cuerpo de la solicitud
     $jsonData = file_get_contents("php://input");
+    $data = json_decode($jsonData, true);
 
-    // Intentar decodificar el JSON
-    $data = json_decode($jsonData, true);  // Decodificar JSON a array asociativo
+    // Verificar datos requeridos
+    if (!isset($data["name"]) || !isset($data["lastname"]) || !isset($data["email"]) || !isset($data["password"])) {       
+        Flight::jsonHalt(["message" => "Faltan datos para registrar el usuario."], 400);
+    }
 
-    // Verificar si los datos necesarios están presentes
-    if (!isset($data["name"]) || !isset($data["lastname"]) || !isset($data["email"]) || !isset($data["password"])) Flight::jsonHalt(["message" => "Faltan datos para registrar el usuario."], 400);
-
-    // Obtener los valores desde el JSON
     $name = $data["name"];
     $lastname = $data["lastname"];
     $email = $data["email"];
     $password = $data["password"];
 
-    // Verificar si el email ya está registrado
+    // Verificar si el email existe
     $stmt = $pdo->prepare("SELECT COUNT(*) FROM usuarios WHERE email = :email");
     $stmt->bindParam(':email', $email);
     $stmt->execute();
     $userExists = $stmt->fetchColumn();
 
-    if ($userExists > 0) Flight::jsonHalt(["message" => "El usuario con este email ya está registrado."], 400);
+    if ($userExists > 0) {       
+        Flight::jsonHalt(["message" => "El usuario con este email ya está registrado."], 400);
+    }
 
-    // Crear un ID único para el nuevo usuario
     $id = bin2hex(random_bytes(16));
-
-    // Generar un token JWT para el nuevo usuario
     $token = JWTHandler::encode(['id' => $id]);
 
-    // Guardar caché con los datos del usuario
     $cacheItem = $cache->getItem(md5($token));
-
     if(!$cacheItem->isHit()){
         $cacheData = [
             'id' => $id,
@@ -59,49 +53,64 @@ Flight::route('POST /register', function() {
         $cache->save($cacheItem);
     }
 
-    // Responder con un mensaje de éxito y el token
     Flight::json(["message" => "Usuario registrado temporalmente.", "token" => $token, "expiration" => time() + 420], 200);
 });
 
 Flight::route('POST /login', function() {
     global $pdo;
     $cache = require '../config/cache.php';
-    // Leer los datos JSON del cuerpo de la solicitud
     $jsonData = file_get_contents("php://input");
+    $data = json_decode($jsonData, true);
 
-    // Intentar decodificar el JSON
-    $data = json_decode($jsonData, true);  // Decodificar JSON a array asociativo
+    // Verificar datos requeridos
+    if (!isset($data["email"]) || !isset($data["password"])) {       
+        Flight::jsonHalt(["message" => "Faltan datos para iniciar sesión."], 400);
+    }
 
-    // Verificar si los datos necesarios están presentes
-    if (!isset($data["email"]) || !isset($data["password"])) Flight::jsonHalt(["message" => "Faltan datos para registrar el usuario."], 400);
-
-    // Obtener los valores desde el JSON
     $email = $data["email"];
     $password = $data["password"];
-
-    // Obtener el usuario y su contraseña desde la base de datos
+    $ip = Flight::request()->ip ?? $_SERVER['REMOTE_ADDR'];
+    $agent = Flight::request()->user_agent ?? $_SERVER['HTTP_USER_AGENT'];
+    
     $stmt = $pdo->prepare("SELECT id, password_hash FROM usuarios WHERE email = :email");
     $stmt->bindParam(':email', $email);
     $stmt->execute();
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if (!$user) {
+    if (!$user) {      
         Flight::jsonHalt(["message" => "El usuario con este email no está registrado."], 400);
     }
 
-    // Verificar la contraseña
     if (!password_verify($password, $user['password_hash'])) {
+        // Notificación para contraseña incorrecta
+        $mensajeNotif = "Intento de login con contraseña incorrecta";
+        $noti = $pdo->prepare("
+            INSERT INTO notificaciones (tipo, mensaje, propietario)
+            VALUES ('seguridad', :mensaje, :propietario)
+        ");
+        $noti->bindParam(':mensaje', $mensajeNotif);
+        $noti->bindParam(':propietario', $user['id']);
+        $noti->execute();
+
+        $estado = 'fallido';
+        $stmt = $pdo->prepare("
+            INSERT INTO registro_conexiones 
+            (ip_origen, navegador, propietario, estado)
+            VALUES (:ip_origen, :navegador, :propietario, :estado)
+        ");
+        $stmt->bindParam(':ip_origen', $ip);
+        $stmt->bindParam(':navegador', $agent);
+        $stmt->bindParam(':propietario', $user['id']);
+        $stmt->bindParam(':estado', $estado);
+        $stmt->execute();
+        
         Flight::jsonHalt(["message" => "La contraseña es incorrecta."], 401);
     }
 
     $id = $user['id'];
-
-    // Generar un token JWT para el nuevo usuario
     $token = JWTHandler::encode(['id' => $id]);
 
-    // Guardar caché con los datos del usuario
     $cacheItem = $cache->getItem(md5($token));
-
     if(!$cacheItem->isHit()){
         $cacheData = [
             'id' => $id,
@@ -116,8 +125,7 @@ Flight::route('POST /login', function() {
         $cache->save($cacheItem);
     }
 
-    // Responder con un mensaje de éxito y el token
-    Flight::json(["message" => "Usuario registrado temporalmente.", "token" => $token, "expiration" => time() + 420], 200);
+    Flight::json(["message" => "Inicio de sesión exitoso.", "token" => $token, "expiration" => time() + 420], 200);
 });
 
 Flight::route('POST /validate', function(){
@@ -522,6 +530,13 @@ Flight::route('POST /change-pass', function () {
         $stmt->bindParam(':password_hash', $newHashedPassword);
         $stmt->bindParam(':propietario', $id);
         $stmt->execute();
+
+        $mensajeNotif = "Contraseña cambiada exitosamente";
+        $noti = $pdo->prepare("
+            INSERT INTO notificaciones (tipo, mensaje, propietario)
+            VALUES ('seguridad', ?, ?)
+        ");
+        $noti->execute([$mensajeNotif, $id]);
 
         $pdo->commit();
 
