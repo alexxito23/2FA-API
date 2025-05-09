@@ -1,6 +1,0 @@
-RewriteEngine On
-
-# Reglas de reescritura originales
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule ^(.*)$ index.php [QSA,L]
