@@ -1,7 +1,7 @@
 <?php
 require_once '../config/config.php';
 require_once '../config/jwt.php';
-require_once '../config/authcookie.php';
+require_once '../config/authCookie.php';
 require_once '../config/fileManager.php';
 require '../vendor/autoload.php';
 
