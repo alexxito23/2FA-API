@@ -321,7 +321,7 @@ Flight::route('GET /check-register', function() {
     }
     
     // Establecer el tiempo límite de espera (7 minutos)
-    $expirationTime = time() + 420; // 7 minutos en segundos
+    $expirationTime = time() + 390; // 7 minutos en segundos
 
     // Bucle para verificar si la clave ha sido insertada en la base de datos
     while (time() < $expirationTime) {
@@ -381,7 +381,7 @@ Flight::route('GET /check-login', function() {
     
     // Establecer el tiempo límite de espera (7 minutos)
     $initTime = time();
-    $expirationTime = time() + 420; // 7 minutos en segundos
+    $expirationTime = time() + 390; // 7 minutos en segundos
 
     // Bucle para verificar si la clave ha sido insertada en la base de datos
     while (time() < $expirationTime) {
@@ -580,7 +580,7 @@ Flight::route('GET /check-pass', function() {
     
     // Establecer el tiempo límite de espera (7 minutos)
     $initTime = time();
-    $expirationTime = time() + 420; // 7 minutos en segundos
+    $expirationTime = time() + 390; // 7 minutos en segundos
 
     // Bucle para verificar si la clave ha sido insertada en la base de datos
     while (time() < $expirationTime) {
