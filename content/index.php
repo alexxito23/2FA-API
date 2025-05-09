@@ -96,7 +96,7 @@ Flight::route('POST /scan-dir', function () {
             $existe = $stmt->fetchColumn();
 
             if ($existe == 0) {
-                $insert = $pdo->prepare("INSERT INTO archivos (nombre, propietario, ruta, tamaño, fecha) VALUES (?, ?, ?, ?, ?)");
+                $insert = $pdo->prepare("INSERT INTO archivos (nombre, propietario, ruta, tamano, fecha) VALUES (?, ?, ?, ?, ?)");
                 $insert->execute([$nombre, $userID, $padreID, $tamano, $modificacion]);
             }
         }
@@ -273,14 +273,14 @@ function eliminarDirectorioRecursivo(int $directorioId, PDO $pdo): int {
         $totalEliminado += eliminarDirectorioRecursivo($subId, $pdo);
     }
 
-    $stmt = $pdo->prepare("SELECT id, nombre, tamaño FROM archivos WHERE ruta = :id");
+    $stmt = $pdo->prepare("SELECT id, nombre, tamano FROM archivos WHERE ruta = :id");
     $stmt->execute([':id' => $directorioId]);
     $archivos = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($archivos as $archivo) {
         $archivoId = $archivo['id'];
         $nombreArchivo = $archivo['nombre'];
-        $totalEliminado += (int)$archivo['tamaño'];
+        $totalEliminado += (int)$archivo['tamano'];
 
         notificarEliminacionCompartidos($pdo, $archivoId, 'archivo', $nombreArchivo);
         eliminarComparticionesYNotificaciones($pdo, $archivoId, 'archivo');
@@ -344,17 +344,17 @@ Flight::route('POST /delete-file', function () {
     $rutaID = $stmtRuta->fetchColumn();
 
     if ($rutaID) {
-        $stmtTamaño = $pdo->prepare("SELECT id, tamaño FROM archivos WHERE nombre = :nombre AND propietario = :propietario AND ruta = :ruta");
-        $stmtTamaño->execute([
+        $stmttamano = $pdo->prepare("SELECT id, tamano FROM archivos WHERE nombre = :nombre AND propietario = :propietario AND ruta = :ruta");
+        $stmttamano->execute([
             ':nombre' => $nombreLimpio,
             ':propietario' => $userID,
             ':ruta' => $rutaID
         ]);
-        $archivoInfo = $stmtTamaño->fetch(PDO::FETCH_ASSOC);
+        $archivoInfo = $stmttamano->fetch(PDO::FETCH_ASSOC);
 
         if ($archivoInfo) {
             $archivoId = $archivoInfo['id'];
-            $tamaño = $archivoInfo['tamaño'];
+            $tamano = $archivoInfo['tamano'];
 
             notificarEliminacionCompartidos($pdo, $archivoId, 'archivo', $nombreLimpio);
             eliminarComparticionesYNotificaciones($pdo, $archivoId, 'archivo');
@@ -363,11 +363,11 @@ Flight::route('POST /delete-file', function () {
             $stmtDelete->execute([$archivoId]);
 
             $stmtUpdate = $pdo->prepare("UPDATE almacenamiento SET almacenamiento_actual = GREATEST(almacenamiento_actual - ?, 0) WHERE propietario = ?");
-            $stmtUpdate->execute([$tamaño, $userID]);
+            $stmtUpdate->execute([$tamano, $userID]);
 
             Flight::json(['message' => 'Archivo eliminado correctamente'], 200);
         } else {
-            Flight::json(['error' => 'No se pudo obtener el tamaño del archivo de la base de datos.'], 500);
+            Flight::json(['error' => 'No se pudo obtener el tamano del archivo de la base de datos.'], 500);
         }
     } else {
         Flight::json(['error' => 'No se encontró el directorio en la base de datos.'], 404);
@@ -437,7 +437,7 @@ Flight::route('GET /latest-files', function () {
 
     try {
         $stmt = $pdo->prepare("
-            SELECT nombre, tamaño, fecha, ruta 
+            SELECT nombre, tamano, fecha, ruta 
             FROM archivos 
             WHERE propietario = :userID 
             ORDER BY fecha DESC 
@@ -454,7 +454,7 @@ Flight::route('GET /latest-files', function () {
             
             return [
                 'nombre' => $archivo['nombre'],
-                'tamaño' => $archivo['tamaño'],
+                'tamano' => $archivo['tamano'],
                 'fecha'  => $archivo['fecha'],
                 'ruta'   => $rutaNombre
             ];
@@ -492,7 +492,7 @@ Flight::route('GET /favorite-files', function () {
 
     try {
         $stmt = $pdo->prepare("
-            SELECT nombre, tamaño, fecha, ruta 
+            SELECT nombre, tamano, fecha, ruta 
             FROM archivos 
             WHERE propietario = :userID AND favorito = true
         ");
@@ -507,7 +507,7 @@ Flight::route('GET /favorite-files', function () {
             
             return [
                 'nombre' => $archivo['nombre'],
-                'tamaño' => $archivo['tamaño'],
+                'tamano' => $archivo['tamano'],
                 'fecha'  => $archivo['fecha'],
                 'directorio' => $rutaNombre
             ];
@@ -632,10 +632,10 @@ Flight::route('POST /encrypt-upload', function () {
             continue;
         }
     
-        // ⚖️ Calcular tamaño real del archivo ya encriptado
+        // ⚖️ Calcular tamano real del archivo ya encriptado
         $encryptedSize = filesize($destination);
         if ($encryptedSize === false) {
-            $errors[] = "No se pudo obtener el tamaño del archivo encriptado $originalName.";
+            $errors[] = "No se pudo obtener el tamano del archivo encriptado $originalName.";
             unlink($destination);
             continue;
         }
@@ -645,7 +645,7 @@ Flight::route('POST /encrypt-upload', function () {
         $archivosEncriptados[] = [
             'nombre' => $encryptedName,
             'ruta' => $rutaID,
-            'tamaño' => $encryptedSize,
+            'tamano' => $encryptedSize,
             'fecha' => date("Y-m-d H:i:s")
         ];
     }    
@@ -666,12 +666,12 @@ Flight::route('POST /encrypt-upload', function () {
 
     // 💾 Insertar en BD y actualizar almacenamiento_actual
     foreach ($archivosEncriptados as $archivo) {
-        $stmtInsert = $pdo->prepare("INSERT INTO archivos (nombre, propietario, ruta, tamaño, fecha) VALUES (?, ?, ?, ?, ?)");
+        $stmtInsert = $pdo->prepare("INSERT INTO archivos (nombre, propietario, ruta, tamano, fecha) VALUES (?, ?, ?, ?, ?)");
         $stmtInsert->execute([
             $archivo['nombre'],
             $userID,
             $archivo['ruta'],
-            $archivo['tamaño'],
+            $archivo['tamano'],
             $archivo['fecha']
         ]);
     }
@@ -713,7 +713,7 @@ Flight::route('POST /encrypt-folder-upload', function () {
     }
 
     // 🔍 Obtener almacenamiento actual, máximo y alerta
-    $stmtStorage = $pdo->prepare("SELECT almacenamiento_actual, almacenamiento_maximo, tamaño_alerta FROM almacenamiento WHERE propietario = ?");
+    $stmtStorage = $pdo->prepare("SELECT almacenamiento_actual, almacenamiento_maximo, tamano_alerta FROM almacenamiento WHERE propietario = ?");
     $stmtStorage->execute([$userID]);
     $storage = $stmtStorage->fetch(PDO::FETCH_ASSOC);
 
@@ -724,9 +724,9 @@ Flight::route('POST /encrypt-folder-upload', function () {
 
     $actual = (int) $storage['almacenamiento_actual'];
     $maximo = (int) $storage['almacenamiento_maximo'];
-    $alerta = (int) $storage['tamaño_alerta'];
+    $alerta = (int) $storage['tamano_alerta'];
 
-    // 📦 Calcular tamaño total de archivos a subir
+    // 📦 Calcular tamano total de archivos a subir
     $totalSizeToUpload = 0;
     foreach ($_FILES['files']['tmp_name'] as $tmpFile) {
         $fileSize = filesize($tmpFile);
@@ -843,14 +843,14 @@ Flight::route('POST /encrypt-folder-upload', function () {
 
         $encryptedSize = filesize($fullPath);
         if ($encryptedSize === false) {
-            $errors[] = "No se pudo obtener el tamaño de $originalName.";
+            $errors[] = "No se pudo obtener el tamano de $originalName.";
             unlink($fullPath);
             continue;
         }
 
         $totalEncryptedSize += $encryptedSize;
 
-        $stmtInsert = $pdo->prepare("INSERT INTO archivos (nombre, propietario, ruta, tamaño) VALUES (?, ?, ?, ?)");
+        $stmtInsert = $pdo->prepare("INSERT INTO archivos (nombre, propietario, ruta, tamano) VALUES (?, ?, ?, ?)");
         $stmtInsert->execute([
             $encryptedName,
             $userID,
@@ -870,7 +870,7 @@ Flight::route('POST /encrypt-folder-upload', function () {
         Flight::json([
             "message" => "Carpeta subida y encriptada correctamente, pero se ha superado el umbral de alerta.",
             "alerta" => true,
-            "tamaño_alerta" => $alerta,
+            "tamano_alerta" => $alerta,
         ], 200);
         return;
     }
@@ -1228,7 +1228,7 @@ Flight::route('GET /get-space', function () {
     $userID = $userData["id"];
 
     // Consultar almacenamiento
-    $stmt = $pdo->prepare('SELECT almacenamiento_maximo, almacenamiento_actual, tamaño_alerta FROM almacenamiento WHERE propietario = :propietario');
+    $stmt = $pdo->prepare('SELECT almacenamiento_maximo, almacenamiento_actual, tamano_alerta FROM almacenamiento WHERE propietario = :propietario');
     $stmt->bindParam(':propietario', $userID);
     $stmt->execute();
     $result = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -1270,7 +1270,7 @@ Flight::route('POST /update-alert', function() {
     $data = json_decode($jsonData, true);
 
     if (!isset($data["alertValue"])) {
-        Flight::jsonHalt(["message" => "El tamaño de alerta es requerido."], 400);
+        Flight::jsonHalt(["message" => "El tamano de alerta es requerido."], 400);
     }
 
     $alerta = $data["alertValue"];
@@ -1282,7 +1282,7 @@ Flight::route('POST /update-alert', function() {
 
     $alertInBytes = intval($alerta) * 1024 * 1024 * 1024;
 
-    $stmt = $pdo->prepare("UPDATE almacenamiento SET tamaño_alerta = ? WHERE propietario = ?");
+    $stmt = $pdo->prepare("UPDATE almacenamiento SET tamano_alerta = ? WHERE propietario = ?");
     $stmt->execute([$alertInBytes, $userID]);
 
     Flight::json(['message' => 'Alerta actualizada con éxito']);
@@ -1616,7 +1616,7 @@ Flight::route('GET /shared-owner', function () {
         u.email AS destinatario_email,
         a.nombre AS nombre_archivo,
         a.fecha AS fecha_archivo,
-        a.tamaño AS tamaño_archivo,
+        a.tamano AS tamano_archivo,
         d.nombre AS nombre_directorio,
         d.fecha_creacion AS fecha_directorio
     FROM comparticion c
@@ -1642,7 +1642,7 @@ Flight::route('GET /shared-owner', function () {
             $resultado[] = [
                 "nombre" => $row["nombre_archivo"],
                 "fecha" => $row["fecha_archivo"],
-                "tamaño" => (int) $row["tamaño_archivo"],
+                "tamano" => (int) $row["tamano_archivo"],
                 "permiso" => $row["permiso"],
                 "destinatario_email" => $row["destinatario_email"],
                 "tipo" => "archivo"
@@ -1651,7 +1651,7 @@ Flight::route('GET /shared-owner', function () {
             $resultado[] = [
                 "nombre" => $row["nombre_directorio"],
                 "fecha" => $row["fecha_directorio"],
-                "tamaño" => null,
+                "tamano" => null,
                 "permiso" => $row["permiso"],
                 "destinatario_email" => $row["destinatario_email"],
                 "tipo" => "directorio"
@@ -1716,7 +1716,7 @@ Flight::route('POST /shared-files', function () {
         SELECT 
             a.nombre AS nombre,
             a.fecha AS fecha,
-            a.tamaño AS tamaño,
+            a.tamano AS tamano,
             c.permiso AS permiso,
             COALESCE(u.email, g.nombre) AS destinatario_email,
             'archivo' AS tipo
@@ -1733,7 +1733,7 @@ Flight::route('POST /shared-files', function () {
         SELECT 
             d.nombre AS nombre,
             d.fecha_creacion AS fecha,
-            NULL AS tamaño,
+            NULL AS tamano,
             c.permiso AS permiso,
             COALESCE(u.email, g.nombre) AS destinatario_email,
             'directorio' AS tipo
@@ -2035,7 +2035,7 @@ Flight::route('GET /shared-files', function () {
                 d.ruta_padre AS directorio_ruta_padre,
                 a.id AS archivo_id,
                 a.nombre AS archivo_nombre,
-                a.tamaño AS archivo_tamaño,
+                a.tamano AS archivo_tamano,
                 a.fecha AS archivo_fecha,
                 d.nombre AS directorio_nombre,
                 d.ruta_padre AS directorio_ruta_padre
@@ -2819,7 +2819,7 @@ Flight::route('GET /group-files', function () {
             r.id,
             r.item_nombre,
             r.fecha,
-            r.tamaño,
+            r.tamano,
             r.permiso,
             r.grupo_nombre,
             r.propietario_email,
@@ -2831,7 +2831,7 @@ Flight::route('GET /group-files', function () {
                     a.id,
                     a.nombre AS item_nombre,
                     a.fecha,
-                    a.tamaño,
+                    a.tamano,
                     c.permiso,
                     g.nombre AS grupo_nombre,
                     u.email AS propietario_email,
@@ -2850,7 +2850,7 @@ Flight::route('GET /group-files', function () {
                     d.id,
                     d.nombre AS item_nombre,
                     d.fecha_creacion AS fecha,
-                    NULL AS tamaño,
+                    NULL AS tamano,
                     c.permiso,
                     g.nombre AS grupo_nombre,
                     u.email AS propietario_email,
@@ -2901,7 +2901,7 @@ Flight::route('GET /group-files', function () {
             'id' => $item['id'] ?? null,
             'nombre' => $item['item_nombre'] ?? '',
             'fecha' => $item['fecha'] ?? null,
-            'tamaño' => $item['tamaño'] ?? null,
+            'tamano' => $item['tamano'] ?? null,
             'permiso' => $item['permiso'] ?? null,
             'propietario_email' => $item['propietario_email'] ?? '',
             'tipo' => $item['tipo'] ?? 'archivo',

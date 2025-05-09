@@ -22,7 +22,7 @@ CREATE TABLE archivos (
     id INT AUTO_INCREMENT PRIMARY KEY,
     nombre VARCHAR(40) NOT NULL,
   	fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
-  	tamaño INT NOT NULL,
+  	tamano INT NOT NULL,
   	ruta INT NOT NULL,
     propietario VARCHAR(32) NOT NULL,
     favorito BOOLEAN DEFAULT false NULL,
@@ -46,7 +46,7 @@ CREATE TABLE almacenamiento (
     propietario VARCHAR(32),
     almacenamiento_maximo INT NOT NULL,
     almacenamiento_actual INT NOT NULL,
-  	tamaño_alerta INT NOT NULL,
+  	tamano_alerta INT NOT NULL,
   	PRIMARY KEY (propietario),
     FOREIGN KEY (propietario) REFERENCES usuarios(id)
 );

@@ -213,7 +213,7 @@ Flight::route('POST /validate', function(){
                     $stmt->bindParam(':propietario', $id);
                     $stmt->execute(); 
 
-                    $stmt = $pdo->prepare("INSERT INTO almacenamiento (propietario, almacenamiento_maximo, almacenamiento_actual, tamaño_alerta) VALUES (:propietario, 5368709120, 0, 4294967296)");
+                    $stmt = $pdo->prepare("INSERT INTO almacenamiento (propietario, almacenamiento_maximo, almacenamiento_actual, tamano_alerta) VALUES (:propietario, 5368709120, 0, 4294967296)");
                     $stmt->bindParam(':propietario', $id);
                     $stmt->execute(); 
 

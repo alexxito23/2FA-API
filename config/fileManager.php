@@ -68,8 +68,12 @@ class FileManager
     public function scanDirectory($userId) {
         // Construir la ruta del directorio del usuario
         $dirPath = rtrim($this->basePath, '/') . '/' . trim($userId, '/');
+
+        // No permitir listar directamente /var/shared
+        if (realpath($dirPath) === realpath($this->basePath)) {
+            return;
+        }
     
-        // Resolver ruta real y validar que está dentro de basePath
         $realPath = realpath($dirPath);
         $baseRealPath = realpath($this->basePath);
     
