@@ -4,22 +4,15 @@ require_once '../config/jwt.php';
 require_once '../config/authCookie.php';
 require '../vendor/autoload.php';
 
-/* Flight::before('start', function () {
-    header('Access-Control-Allow-Origin: http://localhost:3000');
-    header('Access-Control-Allow-Credentials: true');
-    header('Access-Control-Allow-Headers: Content-Type');
-    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-});
- */
-
 Flight::route('GET /logout', function() {
     // Expirar la cookie "auth"
     setcookie("auth", "", [
         "expires" => time() - 3600,
         "path" => "/",
         "httponly" => true,
-        "samesite" => "Lax",
-        "secure" => false // true si usas HTTPS
+        "samesite" => "None",
+        "secure" => true, // true si usas HTTPS
+        "domain" => ".cloudblock.cloud"
     ]);
 
     // Puedes redirigir o devolver una respuesta JSON

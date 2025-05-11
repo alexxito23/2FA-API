@@ -42,66 +42,6 @@ Flight::route('POST /scan-dir', function () {
         Flight::jsonHalt(["message" => "Directorio no encontrado"], 400);
     }
 
-    // ✅ Paso 1: Buscar o crear raíz "/"
-    $stmtRaiz = $pdo->prepare("SELECT id FROM directorios WHERE nombre = '/' AND propietario = ? AND ruta_padre IS NULL LIMIT 1");
-    $stmtRaiz->execute([$userID]);
-    $padreID = $stmtRaiz->fetchColumn();
-
-    if (!$padreID) {
-        Flight::jsonHalt(["message" => "No se encontro la ruta padre"], 400);
-    }
-
-    // ✅ Paso 2: Recorrer cada parte del path desde la raíz
-    $partes = explode('/', $directorio);
-    foreach ($partes as $parte) {
-        if($parte !== ""){
-            $stmt = $pdo->prepare("SELECT id FROM directorios WHERE nombre = :nombre AND propietario = :propietario AND ruta_padre = :ruta_padre LIMIT 1");
-            $stmt->execute([
-                ':nombre' => $parte,
-                ':propietario' => $userID,
-                ':ruta_padre' => $padreID
-            ]);
-            $idEncontrado = $stmt->fetchColumn();
-
-            if ($idEncontrado) {
-                $padreID = $idEncontrado;
-            } else {
-                $stmtInsert = $pdo->prepare("INSERT INTO directorios (nombre, propietario, ruta_padre) VALUES (?, ?, ?)");
-                $stmtInsert->execute([$parte, $userID, $padreID]);
-                $padreID = $pdo->lastInsertId();
-            }
-        }
-    }
-
-    // ✅ Paso 3: Insertar archivos y subdirectorios dentro de ese directorio
-    foreach ($contents["contenido"] as $item) {
-        $nombre = $item["nombre"];
-        $tipo = strtolower($item["tipo"]);
-        $modificacion = $item["modificacion"];
-        $tamano = $item["tamano"] ?? 0;
-
-        if ($tipo === "directorio") {
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM directorios WHERE nombre = ? AND propietario = ? AND ruta_padre = ?");
-            $stmt->execute([$nombre, $userID, $padreID]);
-            $existe = $stmt->fetchColumn();
-
-            if ($existe == 0) {
-                $insert = $pdo->prepare("INSERT INTO directorios (nombre, propietario, ruta_padre) VALUES (?, ?, ?)");
-                $insert->execute([$nombre, $userID, $padreID]);
-            }
-
-        } elseif ($tipo === "archivo") {
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM archivos WHERE nombre = ? AND propietario = ? AND ruta = ?");
-            $stmt->execute([$nombre, $userID, $padreID]);
-            $existe = $stmt->fetchColumn();
-
-            if ($existe == 0) {
-                $insert = $pdo->prepare("INSERT INTO archivos (nombre, propietario, ruta, tamano, fecha) VALUES (?, ?, ?, ?, ?)");
-                $insert->execute([$nombre, $userID, $padreID, $tamano, $modificacion]);
-            }
-        }
-    }
-
     Flight::json($contents, 200);
 });
 
@@ -151,37 +91,24 @@ Flight::route('POST /create-dir', function () {
 
     // 5. Registrar en la base de datos
     try {
-        if ($directorio === "") {
-            // Directorio raíz (sin padre)
-            $stmt = $pdo->prepare("INSERT INTO directorios (nombre, propietario) VALUES (:nombre, :propietario)");
-            $stmt->execute([
-                ':nombre' => $nombreLimpio,
-                ':propietario' => $userID,
-            ]);
-        } else {
-            // Directorio anidado, buscar el ID del padre
-            $rutaPadre = basename($directorio);
-
-            $stmt = $pdo->prepare("SELECT id FROM directorios WHERE nombre = :nombre AND propietario = :propietario LIMIT 1");
-            $stmt->execute([
-                ':nombre' => $rutaPadre,
-                ':propietario' => $userID,
-            ]);
-
-            $rutaPadreId = $stmt->fetchColumn();
-
-            if (!$rutaPadreId) {
-                Flight::jsonHalt(["message" => "No se encontró el directorio padre."], 404);
-            }
-
-            $stmt = $pdo->prepare("INSERT INTO directorios (nombre, propietario, ruta_padre) VALUES (:nombre, :propietario, :ruta_padre)");
-            $stmt->execute([
-                ':nombre' => $nombreLimpio,
-                ':propietario' => $userID,
-                ':ruta_padre' => $rutaPadreId,
-            ]);
+        // Directorio anidado, buscar el ID del padre
+        $rutaPadre = $directorio ? basename($directorio) : "/";
+        $stmt = $pdo->prepare("SELECT id FROM directorios WHERE nombre = :nombre AND propietario = :propietario LIMIT 1");
+        $stmt->execute([
+            ':nombre' => $rutaPadre,
+            ':propietario' => $userID,
+        ]);
+        $rutaPadreId = $stmt->fetchColumn();
+        if (!$rutaPadreId) {
+            Flight::jsonHalt(["message" => "No se encontró el directorio padre."], 404);
         }
-
+        $stmt = $pdo->prepare("INSERT INTO directorios (nombre, propietario, ruta_padre) VALUES (:nombre, :propietario, :ruta_padre)");
+        $stmt->execute([
+            ':nombre' => $nombreLimpio,
+            ':propietario' => $userID,
+            ':ruta_padre' => $rutaPadreId,
+        ]);
+        
         Flight::json(["message" => "Directorio creado con éxito."], 201);
     } catch (PDOException $e) {
         Flight::jsonHalt(["message" => "Error de base de datos: " . $e->getMessage()], 500);
@@ -1228,7 +1155,7 @@ Flight::route('GET /get-space', function () {
     $userID = $userData["id"];
 
     // Consultar almacenamiento
-    $stmt = $pdo->prepare('SELECT almacenamiento_maximo, almacenamiento_actual, tamano_alerta FROM almacenamiento WHERE propietario = :propietario');
+    $stmt = $pdo->prepare('SELECT almacenamiento_maximo, almacenamiento_actual, tamano_alerta AS tamaño_alerta FROM almacenamiento WHERE propietario = :propietario');
     $stmt->bindParam(':propietario', $userID);
     $stmt->execute();
     $result = $stmt->fetch(PDO::FETCH_ASSOC);

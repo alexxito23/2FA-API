@@ -14,8 +14,9 @@ function generateAuthCookie($userID, $expiresIn = 3600) {
         "expires" => time() + $expiresIn,
         "path" => "/",
         "httponly" => true,
-        "samesite" => "Lax",
-        "secure" => false // Solo en HTTPS
+        "samesite" => "None",
+        "secure" => true, // Solo en HTTPS
+        "domain" => ".cloudblock.cloud"
     ]);
 
     return true; // Solo retorna éxito, sin exponer el token
