@@ -1964,14 +1964,13 @@ Flight::route('GET /shared-files', function () {
                 a.nombre AS archivo_nombre,
                 a.tamano AS archivo_tamaño,
                 a.fecha AS archivo_fecha,
-                d.nombre AS directorio_nombre,
-                d.ruta_padre AS directorio_ruta_padre
+                a.ruta AS archivo_directorio_id 
             FROM comparticion c
             LEFT JOIN archivos a ON c.archivo = a.id
             LEFT JOIN directorios d ON c.directorio = d.id
             LEFT JOIN usuarios u ON c.propietario = u.id
             WHERE c.usuario_destinatario = :userID
-            AND c.estado = 'activo'  -- Solo consideramos comparticiones activas
+            AND c.estado = 'activo'
             ORDER BY c.fecha_comparticion DESC
         ";
 
@@ -1980,39 +1979,52 @@ Flight::route('GET /shared-files', function () {
 
         $result = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Modificar las rutas de directorios para ser relativos a la raíz
+        // Modificar las rutas de directorios
         foreach ($result as &$compartido) {
-            // Si es un archivo compartido
             if ($compartido['archivo_id']) {
-                // Para los archivos, mostramos el nombre y la ruta del directorio al que pertenece
-                $compartido['directorio_ruta'] = getDirectorioBase($compartido['directorio_ruta_padre']);
-            }
-            // Si es un directorio compartido
-            if ($compartido['directorio_id']) {
-                // Para los directorios, simplemente mostramos la ruta completa
-                $compartido['directorio_ruta'] = getDirectorioBase($compartido['directorio_ruta_padre']);
+                // Usar el directorio_id del ARCHIVO (no de la compartición)
+                $compartido['directorio_ruta'] = getRutaCompletaDirectorio(
+                    $compartido['archivo_directorio_id'], 
+                    $pdo
+                );
+            } elseif ($compartido['directorio_id']) {
+                // Usar el directorio_id de la COMPARTICIÓN
+                $compartido['directorio_ruta'] = getRutaCompletaDirectorio(
+                    $compartido['directorio_ruta_padre'], 
+                    $pdo
+                );
             }
         }
 
-        // Devolver los resultados como respuesta JSON
         Flight::json(["comparticiones" => $result], 200);
     } catch (PDOException $e) {
         Flight::json(["error" => "Error al obtener los archivos y directorios compartidos: " . $e->getMessage()], 500);
     }
 });
 
-// Función para obtener el directorio base de la ruta
-function getDirectorioBase($ruta_padre) {
-    // Aquí se debería implementar la lógica para convertir la ruta de padre en un directorio base
-    // Por ejemplo, puedes hacer una consulta a la base de datos para recuperar la ruta completa
-    global $pdo;
-    $sql = "SELECT nombre FROM directorios WHERE id = :ruta_padre";
-    $stmt = $pdo->prepare($sql);
-    $stmt->execute([':ruta_padre' => $ruta_padre]);
-    $directorio = $stmt->fetch(PDO::FETCH_ASSOC);
+function getRutaCompletaDirectorio(?int $directorioId, PDO $pdo): string {
+    $ruta = [];
 
-    return $directorio ? $directorio['nombre'] : '/';  // Si no hay, devolver 'Raíz'
+    while ($directorioId !== null) {
+        $stmt = $pdo->prepare("SELECT nombre, ruta_padre FROM directorios WHERE id = :id");
+        $stmt->execute([':id' => $directorioId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row) break;
+
+        $nombre = trim($row['nombre']);
+
+        // Ignorar nombres vacíos o slashes
+        if ($nombre !== '' && $nombre !== '/' && $nombre !== '\\') {
+            array_unshift($ruta, $nombre);
+        }
+
+        $directorioId = $row['ruta_padre'];
+    }
+
+    return '/' . implode('/', $ruta);
 }
+
 
 Flight::route('POST /shared-dir', function () {
     global $pdo;
@@ -2277,9 +2289,9 @@ Flight::route('POST /shared-download', function () {
     }
     
     // Función para verificar si un directorio está compartido por nombre
-    function directorioCompartido($nombreDirectorio, $requesterID, $pdo) {
-        $stmt = $pdo->prepare("SELECT id, ruta_padre FROM directorios WHERE nombre = :nombre");
-        $stmt->execute([':nombre' => $nombreDirectorio]);
+    function directorioCompartido($nombreDirectorio, $requesterID, $ownerID, $directorio, $pdo) {
+        $stmt = $pdo->prepare("SELECT id, ruta_padre FROM directorios WHERE nombre = :nombre AND propietario = :ownerid AND ruta_padre = (SELECT id FROM directorios WHERE nombre = :directorio AND propietario = :ownerid)");
+        $stmt->execute([':nombre' => $nombreDirectorio, ':ownerid' => $ownerID, ':directorio' => $directorio]);
         $directorio = $stmt->fetch(PDO::FETCH_ASSOC);
     
         if (!$directorio) return false;
@@ -2295,7 +2307,7 @@ Flight::route('POST /shared-download', function () {
             return;
         }
     } else if (is_dir($targetPath)) {
-        if (!directorioCompartido(basename($targetPath), $requesterID, $pdo)) {
+        if (!directorioCompartido(basename($targetPath), $requesterID, $ownerID, $directorio, $pdo)) {
             Flight::json(["message" => "No autorizado. El directorio no está compartido."], 403);
             return;
         }
