@@ -1405,6 +1405,14 @@ Flight::route('POST /shared', function () {
                 if ($e['permiso'] !== $permiso) {
                     $pdo->prepare("UPDATE comparticion SET permiso = ? WHERE usuario_destinatario = ? AND " . ($tipo === 'archivo' ? "archivo = ?" : "directorio = ?"))->execute([$permiso, $destinatarioId, $id]);
                     $compartidos[] = ["email" => $correoDest, "estado" => "actualizado", "razon" => "Permiso modificado"];
+
+                    $stmtComp = $pdo->prepare("SELECT id FROM comparticion WHERE usuario_destinatario = ? AND " . ($tipo === 'archivo' ? "archivo = ?" : "directorio = ?"));
+                    $stmtComp->execute([$destinatarioId, $id]);
+                    $comparticionId = $stmtComp->fetchColumn();
+                                
+                    $mensaje = "Se ha actualizado tu acceso " . ($permiso === 'copropietario' ? "a copropietario" : "a lector") . 
+                               " sobre el " . ($tipo === 'archivo' ? "archivo" : "directorio") . " '$nombreReal'.";               
+                    $stmtNotif->execute([$mensaje, $destinatarioId, $comparticionId]);
                 } else {
                     $compartidos[] = ["email" => $correoDest, "estado" => "sin cambios"];
                 }
@@ -1412,6 +1420,17 @@ Flight::route('POST /shared', function () {
                 $pdo->prepare("INSERT INTO comparticion (propietario, permiso, estado, usuario_destinatario, archivo, directorio) VALUES (?, ?, 'activo', ?, ?, ?)")
                     ->execute([$userID, $permiso, $destinatarioId, $tipo === 'archivo' ? $id : null, $tipo === 'archivo' ? null : $id]);
                 $compartidos[] = ["email" => $correoDest, "estado" => "nuevo"];
+                $comparticionId = $pdo->lastInsertId();
+
+                // Crear notificaciones para cada usuario
+                $mensaje = "Has recibido acceso " . ($permiso === 'copropietario' ? "como copropietario" : "como lector") . 
+                           " al " . ($tipo === 'archivo' ? "archivo" : "directorio") . " '$nombreReal'.";
+
+                $stmtNotif = $pdo->prepare("
+                    INSERT INTO notificaciones (tipo, mensaje, propietario, comparticion)
+                    VALUES ('informacion', ?, ?, ?)
+                ");
+                $stmtNotif->execute([$mensaje, $destinatarioId, $comparticionId]);
             }
 
             continue;
@@ -1475,8 +1494,6 @@ Flight::route('POST /shared', function () {
         }
     }
 
-    // Revocar usuarios y grupos que ya no estén
-    // Reemplaza esta sección del código:
     // Revocar usuarios y grupos que ya no estén
     foreach ($existentes as $e) {
         // Solo revocar comparticiones creadas por este usuario
@@ -2024,7 +2041,6 @@ function getRutaCompletaDirectorio(?int $directorioId, PDO $pdo): string {
 
     return '/' . implode('/', $ruta);
 }
-
 
 Flight::route('POST /shared-dir', function () {
     global $pdo;
