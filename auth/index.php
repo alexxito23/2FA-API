@@ -234,7 +234,7 @@ Flight::route('POST /validate', function(){
                 $stmt->execute();
                 $keyExists = $stmt->fetchColumn();
         
-                if ($userExists !== 0 && isset($keyExists) && $keyExists === $key) {  
+                if ($userExists !== 0 && isset($keyExists)) {  
                     $stmt = $pdo->prepare("UPDATE token SET ultima_fecha = :ultima_fecha WHERE propietario = :propietario");
                     $stmt->bindParam(':ultima_fecha', $lastDate);
                     $stmt->bindParam(':propietario', $id);
@@ -261,7 +261,7 @@ Flight::route('POST /validate', function(){
                 $stmt->execute();
                 $keyExists = $stmt->fetchColumn();
         
-                if ($userExists !== 0 && isset($keyExists) && $keyExists === $key) {  
+                if ($userExists !== 0 && isset($keyExists)) {  
                     $stmt = $pdo->prepare("UPDATE token SET ultima_fecha = :ultima_fecha WHERE propietario = :propietario");
                     $stmt->bindParam(':ultima_fecha', $lastDate);
                     $stmt->bindParam(':propietario', $id);
